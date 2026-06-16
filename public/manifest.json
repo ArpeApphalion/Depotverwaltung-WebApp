@@ -1,0 +1,25 @@
+{
+  "name": "Depotverwaltung",
+  "short_name": "Depots",
+  "description": "Professionelle Depot-Verwaltungs-App",
+  "start_url": "/depotverwaltung-webapp/",
+  "scope": "/depotverwaltung-webapp/",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#1e40af",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/depotverwaltung-webapp/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/depotverwaltung-webapp/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
