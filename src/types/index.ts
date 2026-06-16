@@ -1,39 +1,30 @@
-export interface FirebaseConfig {
-  apiKey: string;
-  authDomain: string;
-  projectId: string;
-  storageBucket: string;
-  messagingSenderId: string;
-  appId: string;
-}
-
 export interface Depot {
   id: string;
   clientName: string;
   clientEmail: string;
   startValue: number;
   currentValue: number;
-  startDate: string;          // YYYY-MM-DD
-  billingDate: string;        // MM-DD (jährliches Abrechnungsdatum)
-  lastBillingDate: string | null; // YYYY-MM-DD
-  targetReturn: number;       // % p.a.
-  managementFeeRate: number;  // % p.a. (laufende Vergütung)
-  performanceFeeRate: number; // % auf Überperformance (Übergewinnvergütung)
-  highWaterMark: number;      // Höchststand (bereinigt)
-  benchmarkRate: number;      // ING-Benchmark %
+  startDate: string;
+  billingDate: string;
+  lastBillingDate: string | null;
+  targetReturn: number;
+  managementFeeRate: number;
+  performanceFeeRate: number;
+  highWaterMark: number;
+  benchmarkRate: number;
   notes: string;
   currency: string;
-  createdAt: any;
-  updatedAt: any;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface Withdrawal {
   id: string;
   depotId: string;
-  amount: number;   // negativ = Entnahme, positiv = Einzahlung
-  date: string;     // YYYY-MM-DD
+  amount: number;
+  date: string;
   note: string;
-  createdAt: any;
+  createdAt: string;
 }
 
 export interface FeePayment {
@@ -42,8 +33,8 @@ export interface FeePayment {
   managementFee: number;
   performanceFee: number;
   totalFee: number;
-  period: string;              // z.B. "2024"
-  date: string;               // YYYY-MM-DD
+  period: string;
+  date: string;
   depotValueAtBilling: number;
   adjustedValue: number;
   netWithdrawals: number;
@@ -51,14 +42,23 @@ export interface FeePayment {
   highWaterMarkAfter: number;
   benchmarkRate: number;
   hurdle: number;
-  createdAt: any;
+  createdAt: string;
 }
 
 export interface ValueEntry {
   id: string;
   depotId: string;
   value: number;
-  date: string; // YYYY-MM-DD
+  date: string;
   note: string;
-  createdAt: any;
+  createdAt: string;
+}
+
+export interface AppBackup {
+  version: number;
+  exportedAt: string;
+  depots: Record<string, Depot>;
+  withdrawals: Record<string, Withdrawal>;
+  feePayments: Record<string, FeePayment>;
+  valueHistory: Record<string, ValueEntry>;
 }

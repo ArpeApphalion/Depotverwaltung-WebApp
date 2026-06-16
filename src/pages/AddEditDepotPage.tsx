@@ -1,7 +1,5 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { doc, getDoc } from 'firebase/firestore';
-import { useAuth } from '../contexts/AuthContext';
 import { useData } from '../contexts/DataContext';
 import { Depot } from '../types';
 import { today } from '../utils/format';
@@ -27,44 +25,38 @@ export default function AddEditDepotPage() {
   const { id } = useParams<{ id: string }>();
   const isEdit = Boolean(id && id !== 'new');
   const navigate = useNavigate();
-  const { db, user } = useAuth();
-  const { addDepot, updateDepot, deleteDepot } = useData();
+  const { getDepots, addDepot, updateDepot, deleteDepot } = useData();
 
   const [form, setForm] = useState<FormState>(defaultForm);
-  const [loading, setLoading] = useState(isEdit);
   const [saving, setSaving] = useState(false);
-  const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
-    if (!isEdit || !id || !user) return;
-    getDoc(doc(db, `users/${user.uid}/depots/${id}`)).then(snap => {
-      if (snap.exists()) {
-        const d = snap.data() as Depot;
-        setForm({
-          clientName: d.clientName,
-          clientEmail: d.clientEmail || '',
-          startValue: d.startValue.toString(),
-          currentValue: d.currentValue.toString(),
-          startDate: d.startDate,
-          billingDate: d.billingDate,
-          targetReturn: d.targetReturn.toString(),
-          managementFeeRate: d.managementFeeRate.toString(),
-          performanceFeeRate: d.performanceFeeRate.toString(),
-          benchmarkRate: d.benchmarkRate.toString(),
-          notes: d.notes || '',
-          currency: d.currency || 'EUR',
-        });
-      }
-      setLoading(false);
-    });
-  }, [isEdit, id, db, user]);
+    if (!isEdit || !id) return;
+    const depot = getDepots().find(d => d.id === id);
+    if (depot) {
+      setForm({
+        clientName: depot.clientName,
+        clientEmail: depot.clientEmail || '',
+        startValue: depot.startValue.toString(),
+        currentValue: depot.currentValue.toString(),
+        startDate: depot.startDate,
+        billingDate: depot.billingDate,
+        targetReturn: depot.targetReturn.toString(),
+        managementFeeRate: depot.managementFeeRate.toString(),
+        performanceFeeRate: depot.performanceFeeRate.toString(),
+        benchmarkRate: depot.benchmarkRate.toString(),
+        notes: depot.notes || '',
+        currency: depot.currency || 'EUR',
+      });
+    }
+  }, [isEdit, id]);
 
   const set = (k: keyof FormState) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) =>
     setForm(prev => ({ ...prev, [k]: e.target.value }));
 
-  const submit = async (e: React.FormEvent) => {
+  const submit = (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     const startVal = parseFloat(form.startValue);
@@ -72,36 +64,43 @@ export default function AddEditDepotPage() {
     if (!form.clientName.trim()) { setError('Kundenname ist erforderlich.'); return; }
     if (isNaN(startVal) || startVal < 0) { setError('Ungültiger Startwert.'); return; }
     if (isNaN(currVal) || currVal < 0) { setError('Ungültiger aktueller Wert.'); return; }
-
-    // Validate billingDate MM-DD format
     if (!/^\d{2}-\d{2}$/.test(form.billingDate)) { setError('Abrechnungsdatum im Format MM-TT (z.B. 12-31).'); return; }
 
     setSaving(true);
     try {
-      const data: Omit<Depot, 'id' | 'createdAt' | 'updatedAt'> = {
-        clientName: form.clientName.trim(),
-        clientEmail: form.clientEmail.trim(),
-        startValue: startVal,
-        currentValue: currVal,
-        startDate: form.startDate,
-        billingDate: form.billingDate,
-        lastBillingDate: null,
-        targetReturn: parseFloat(form.targetReturn) || 0,
-        managementFeeRate: parseFloat(form.managementFeeRate) || 0,
-        performanceFeeRate: parseFloat(form.performanceFeeRate) || 0,
-        highWaterMark: isEdit ? undefined as any : startVal, // keep existing HWM on edit
-        benchmarkRate: parseFloat(form.benchmarkRate) || 0,
-        notes: form.notes,
-        currency: form.currency,
-      };
-
       if (isEdit && id) {
-        // Don't overwrite highWaterMark and lastBillingDate on edit
-        const { highWaterMark, lastBillingDate, ...editData } = data;
-        await updateDepot(id, editData);
+        updateDepot(id, {
+          clientName: form.clientName.trim(),
+          clientEmail: form.clientEmail.trim(),
+          startValue: startVal,
+          currentValue: currVal,
+          startDate: form.startDate,
+          billingDate: form.billingDate,
+          targetReturn: parseFloat(form.targetReturn) || 0,
+          managementFeeRate: parseFloat(form.managementFeeRate) || 0,
+          performanceFeeRate: parseFloat(form.performanceFeeRate) || 0,
+          benchmarkRate: parseFloat(form.benchmarkRate) || 0,
+          notes: form.notes,
+          currency: form.currency,
+        });
         navigate(`/depot/${id}`);
       } else {
-        const newId = await addDepot(data);
+        const newId = addDepot({
+          clientName: form.clientName.trim(),
+          clientEmail: form.clientEmail.trim(),
+          startValue: startVal,
+          currentValue: currVal,
+          startDate: form.startDate,
+          billingDate: form.billingDate,
+          lastBillingDate: null,
+          targetReturn: parseFloat(form.targetReturn) || 0,
+          managementFeeRate: parseFloat(form.managementFeeRate) || 0,
+          performanceFeeRate: parseFloat(form.performanceFeeRate) || 0,
+          highWaterMark: startVal,
+          benchmarkRate: parseFloat(form.benchmarkRate) || 0,
+          notes: form.notes,
+          currency: form.currency,
+        });
         navigate(`/depot/${newId}`);
       }
     } catch (err: any) {
@@ -110,14 +109,11 @@ export default function AddEditDepotPage() {
     }
   };
 
-  const handleDelete = async () => {
+  const handleDelete = () => {
     if (!id) return;
-    setDeleting(true);
-    await deleteDepot(id);
+    deleteDepot(id);
     navigate('/');
   };
-
-  if (loading) return <div className="spinner" />;
 
   return (
     <>
@@ -130,20 +126,17 @@ export default function AddEditDepotPage() {
 
       <div className="page" style={{ paddingTop: 16 }}>
         <form onSubmit={submit}>
-          {/* Kundendaten */}
           <div className="form-section-title">Kundendaten</div>
 
           <div className="form-group">
             <label className="form-label">Name des Kunden *</label>
             <input className="form-input" placeholder="Max Mustermann" value={form.clientName} onChange={set('clientName')} required />
           </div>
-
           <div className="form-group">
             <label className="form-label">E-Mail (für Excel-Versand)</label>
             <input className="form-input" type="email" placeholder="kunde@example.com" value={form.clientEmail} onChange={set('clientEmail')} />
           </div>
 
-          {/* Depotwerte */}
           <div className="form-section-title">Depotwerte</div>
 
           <div className="form-row">
@@ -172,19 +165,11 @@ export default function AddEditDepotPage() {
             </div>
           </div>
 
-          {/* Abrechnungsdaten */}
           <div className="form-section-title">Abrechnung</div>
 
           <div className="form-group">
             <label className="form-label">Abrechnungsdatum (MM-TT)</label>
-            <input
-              className="form-input"
-              placeholder="12-31"
-              value={form.billingDate}
-              onChange={set('billingDate')}
-              pattern="\d{2}-\d{2}"
-              required
-            />
+            <input className="form-input" placeholder="12-31" value={form.billingDate} onChange={set('billingDate')} pattern="\d{2}-\d{2}" required />
             <div className="form-hint">Format: MM-TT — z.B. 12-31 für 31. Dezember, 06-30 für 30. Juni</div>
           </div>
 
@@ -193,7 +178,6 @@ export default function AddEditDepotPage() {
             <input className="form-input" type="number" step="0.01" placeholder="6" value={form.targetReturn} onChange={set('targetReturn')} />
           </div>
 
-          {/* Vergütung */}
           <div className="form-section-title">Vergütung</div>
 
           <div className="form-row">
@@ -205,7 +189,7 @@ export default function AddEditDepotPage() {
             <div className="form-group">
               <label className="form-label">Übergewinn-Verg. (%)</label>
               <input className="form-input" type="number" step="0.01" min="0" placeholder="20" value={form.performanceFeeRate} onChange={set('performanceFeeRate')} />
-              <div className="form-hint">% auf Outperformance (HWM)</div>
+              <div className="form-hint">% auf Outperformance</div>
             </div>
           </div>
 
@@ -215,7 +199,6 @@ export default function AddEditDepotPage() {
             <div className="form-hint">Aktueller ING-Zinssatz (Hurdle Rate für High-Water-Mark)</div>
           </div>
 
-          {/* Notizen */}
           <div className="form-section-title">Sonstiges</div>
           <div className="form-group">
             <label className="form-label">Notizen</label>
@@ -228,7 +211,6 @@ export default function AddEditDepotPage() {
             {saving ? 'Speichern...' : isEdit ? 'Änderungen speichern' : 'Depot anlegen'}
           </button>
 
-          {/* Delete */}
           {isEdit && (
             <div className="delete-zone" style={{ marginTop: 24 }}>
               <h4 style={{ color: 'var(--danger)', marginBottom: 8 }}>Depot löschen</h4>
@@ -242,9 +224,7 @@ export default function AddEditDepotPage() {
                   <p style={{ fontSize: '.875rem', fontWeight: 600, marginBottom: 8, color: 'var(--danger)' }}>Bist du sicher?</p>
                   <div style={{ display: 'flex', gap: 8 }}>
                     <button type="button" className="btn btn-ghost btn-full" onClick={() => setConfirmDelete(false)}>Abbrechen</button>
-                    <button type="button" className="btn btn-danger btn-full" onClick={handleDelete} disabled={deleting}>
-                      {deleting ? 'Lösche...' : 'Ja, löschen'}
-                    </button>
+                    <button type="button" className="btn btn-danger btn-full" onClick={handleDelete}>Ja, löschen</button>
                   </div>
                 </>
               )}

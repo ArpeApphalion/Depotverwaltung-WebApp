@@ -1,10 +1,9 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useAuth } from '../contexts/AuthContext';
 import { useData } from '../contexts/DataContext';
 import { Depot } from '../types';
 import { formatCurrency, formatBillingDate, daysUntilBilling } from '../utils/format';
-import { calculateSimpleReturn, estimatedFees } from '../utils/calculations';
+import { calculateSimpleReturn } from '../utils/calculations';
 
 function BillingBadge({ billingDate }: { billingDate: string }) {
   const days = daysUntilBilling(billingDate);
@@ -54,26 +53,32 @@ function DepotCard({ depot, onClick }: { depot: Depot; onClick: () => void }) {
 }
 
 export default function DashboardPage() {
-  const { logout, user } = useAuth();
-  const { getDepots } = useData();
+  const { getDepots, exportBackup, importBackup, version } = useData();
   const navigate = useNavigate();
-  const [depots, setDepots] = useState<Depot[]>([]);
-  const [loading, setLoading] = useState(true);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [importing, setImporting] = useState(false);
+  const [importError, setImportError] = useState('');
   const [tab, setTab] = useState<'all' | 'urgent'>('all');
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    const data = await getDepots();
-    setDepots(data);
-    setLoading(false);
-  }, [getDepots]);
-
-  useEffect(() => { load(); }, [load]);
-
+  const depots = getDepots();
   const totalAUM = depots.reduce((s, d) => s + d.currentValue, 0);
   const totalReturn = depots.reduce((s, d) => s + calculateSimpleReturn(d).absolute, 0);
   const urgentDepots = depots.filter(d => daysUntilBilling(d.billingDate) <= 30);
   const displayed = tab === 'urgent' ? urgentDepots : depots;
+
+  const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setImporting(true);
+    setImportError('');
+    try {
+      await importBackup(file);
+    } catch {
+      setImportError('Ungültige Datei. Bitte ein gültiges Backup auswählen.');
+    }
+    setImporting(false);
+    e.target.value = '';
+  };
 
   return (
     <>
@@ -85,13 +90,24 @@ export default function DashboardPage() {
           </div>
           <span style={{ fontWeight: 700, fontSize: '.9375rem' }}>Depotverwaltung</span>
         </div>
-        <button className="btn btn-ghost btn-sm" onClick={logout} style={{ padding: '6px 10px' }}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5-5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z"/></svg>
-          Abmelden
-        </button>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <button className="btn btn-secondary btn-sm" onClick={exportBackup} title="Backup exportieren">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zm-8 2V5h2v6h1.17L12 13.17 9.83 11H11zm-6 7h14v2H5z"/></svg>
+            Backup
+          </button>
+          <button className="btn btn-secondary btn-sm" onClick={() => fileRef.current?.click()} title="Backup importieren" disabled={importing}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16h6v-6h4l-7-7-7 7h4v6zm-4 2h14v2H5z"/></svg>
+            {importing ? '...' : 'Wiederherstellen'}
+          </button>
+          <input ref={fileRef} type="file" accept=".json" style={{ display: 'none' }} onChange={handleImport} />
+        </div>
       </div>
 
       <div className="page">
+        {importError && (
+          <div className="alert alert-danger" style={{ marginTop: 12 }}>{importError}</div>
+        )}
+
         {/* Summary */}
         <div style={{ marginTop: 16 }}>
           <div className="summary">
@@ -112,7 +128,7 @@ export default function DashboardPage() {
                 <strong style={{ color: urgentDepots.length > 0 ? '#fde047' : 'white' }}>
                   {urgentDepots.length}
                 </strong>
-                Fällig (&le;30d)
+                Fällig (≤30d)
               </div>
             </div>
           </div>
@@ -128,10 +144,8 @@ export default function DashboardPage() {
           </div>
         )}
 
-        {/* Content */}
-        {loading ? (
-          <div className="spinner" />
-        ) : displayed.length === 0 ? (
+        {/* Depot list */}
+        {displayed.length === 0 ? (
           <div className="empty">
             <div className="empty-icon">📊</div>
             <h3>Keine Depots</h3>

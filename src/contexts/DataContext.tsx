@@ -1,135 +1,213 @@
-import React, { createContext, useContext, useCallback, ReactNode } from 'react';
-import {
-  collection, doc, getDocs, addDoc, updateDoc, deleteDoc,
-  query, orderBy, Timestamp, writeBatch, getDoc
-} from 'firebase/firestore';
-import { useAuth } from './AuthContext';
-import { Depot, Withdrawal, FeePayment, ValueEntry } from '../types';
+import React, { createContext, useContext, useCallback, ReactNode, useState } from 'react';
+import { Depot, Withdrawal, FeePayment, ValueEntry, AppBackup } from '../types';
+
+// ---- Storage helpers ----
+
+const KEY = {
+  depots: 'dvw_depots',
+  withdrawals: 'dvw_withdrawals',
+  fees: 'dvw_fees',
+  history: 'dvw_history',
+};
+
+function load<T>(key: string): Record<string, T> {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : {};
+  } catch { return {}; }
+}
+
+function save<T>(key: string, data: Record<string, T>): void {
+  localStorage.setItem(key, JSON.stringify(data));
+}
+
+function uid(): string {
+  return crypto.randomUUID();
+}
+
+function now(): string {
+  return new Date().toISOString();
+}
+
+// ---- Context ----
 
 interface DataCtx {
-  getDepots: () => Promise<Depot[]>;
-  addDepot: (d: Omit<Depot, 'id' | 'createdAt' | 'updatedAt'>) => Promise<string>;
-  updateDepot: (id: string, d: Partial<Depot>) => Promise<void>;
-  deleteDepot: (id: string) => Promise<void>;
+  // trigger re-render across components
+  version: number;
+  refresh: () => void;
 
-  getWithdrawals: (depotId: string) => Promise<Withdrawal[]>;
-  addWithdrawal: (d: Omit<Withdrawal, 'id' | 'createdAt'>) => Promise<string>;
-  deleteWithdrawal: (depotId: string, id: string) => Promise<void>;
+  getDepots: () => Depot[];
+  addDepot: (d: Omit<Depot, 'id' | 'createdAt' | 'updatedAt'>) => string;
+  updateDepot: (id: string, d: Partial<Depot>) => void;
+  deleteDepot: (id: string) => void;
 
-  getFeePayments: (depotId: string) => Promise<FeePayment[]>;
-  addFeePayment: (d: Omit<FeePayment, 'id' | 'createdAt'>) => Promise<string>;
+  getWithdrawals: (depotId: string) => Withdrawal[];
+  addWithdrawal: (d: Omit<Withdrawal, 'id' | 'createdAt'>) => string;
+  deleteWithdrawal: (id: string) => void;
 
-  getValueHistory: (depotId: string) => Promise<ValueEntry[]>;
-  addValueEntry: (d: Omit<ValueEntry, 'id' | 'createdAt'>) => Promise<string>;
-  deleteValueEntry: (depotId: string, id: string) => Promise<void>;
+  getFeePayments: (depotId: string) => FeePayment[];
+  addFeePayment: (d: Omit<FeePayment, 'id' | 'createdAt'>) => string;
+
+  getValueHistory: (depotId: string) => ValueEntry[];
+  addValueEntry: (d: Omit<ValueEntry, 'id' | 'createdAt'>) => string;
+  deleteValueEntry: (id: string) => void;
+
+  exportBackup: () => void;
+  importBackup: (file: File) => Promise<void>;
 }
 
 const Ctx = createContext<DataCtx | null>(null);
 
-const path = (uid: string, depotId?: string, sub?: string) => {
-  if (depotId && sub) return `users/${uid}/depots/${depotId}/${sub}`;
-  if (depotId) return `users/${uid}/depots/${depotId}`;
-  return `users/${uid}/depots`;
-};
-
 export function DataProvider({ children }: { children: ReactNode }) {
-  const { db, user } = useAuth();
-  const uid = user!.uid;
+  const [version, setVersion] = useState(0);
+  const refresh = useCallback(() => setVersion(v => v + 1), []);
 
   // ---- Depots ----
-  const getDepots = useCallback(async (): Promise<Depot[]> => {
-    const snap = await getDocs(query(collection(db, path(uid)), orderBy('clientName')));
-    return snap.docs.map(d => ({ id: d.id, ...d.data() } as Depot));
-  }, [db, uid]);
+  const getDepots = useCallback((): Depot[] => {
+    const all = load<Depot>(KEY.depots);
+    return Object.values(all).sort((a, b) => a.clientName.localeCompare(b.clientName));
+  }, [version]);
 
-  const addDepot = useCallback(async (data: Omit<Depot, 'id' | 'createdAt' | 'updatedAt'>): Promise<string> => {
-    const ref = await addDoc(collection(db, path(uid)), {
-      ...data,
-      createdAt: Timestamp.now(),
-      updatedAt: Timestamp.now(),
-    });
-    return ref.id;
-  }, [db, uid]);
+  const addDepot = useCallback((data: Omit<Depot, 'id' | 'createdAt' | 'updatedAt'>): string => {
+    const all = load<Depot>(KEY.depots);
+    const id = uid();
+    all[id] = { ...data, id, createdAt: now(), updatedAt: now() };
+    save(KEY.depots, all);
+    refresh();
+    return id;
+  }, [refresh]);
 
-  const updateDepot = useCallback(async (id: string, data: Partial<Depot>): Promise<void> => {
-    await updateDoc(doc(db, path(uid, id)), { ...data, updatedAt: Timestamp.now() });
-  }, [db, uid]);
+  const updateDepot = useCallback((id: string, data: Partial<Depot>): void => {
+    const all = load<Depot>(KEY.depots);
+    if (all[id]) all[id] = { ...all[id], ...data, updatedAt: now() };
+    save(KEY.depots, all);
+    refresh();
+  }, [refresh]);
 
-  const deleteDepot = useCallback(async (id: string): Promise<void> => {
-    const batch = writeBatch(db);
-    for (const sub of ['withdrawals', 'feePayments', 'valueHistory']) {
-      const snap = await getDocs(collection(db, path(uid, id, sub)));
-      snap.docs.forEach(d => batch.delete(d.ref));
-    }
-    batch.delete(doc(db, path(uid, id)));
-    await batch.commit();
-  }, [db, uid]);
+  const deleteDepot = useCallback((id: string): void => {
+    // Delete depot
+    const depots = load<Depot>(KEY.depots);
+    delete depots[id];
+    save(KEY.depots, depots);
+    // Delete related withdrawals
+    const w = load<Withdrawal>(KEY.withdrawals);
+    Object.keys(w).forEach(k => { if (w[k].depotId === id) delete w[k]; });
+    save(KEY.withdrawals, w);
+    // Delete related fee payments
+    const f = load<FeePayment>(KEY.fees);
+    Object.keys(f).forEach(k => { if (f[k].depotId === id) delete f[k]; });
+    save(KEY.fees, f);
+    // Delete related value history
+    const h = load<ValueEntry>(KEY.history);
+    Object.keys(h).forEach(k => { if (h[k].depotId === id) delete h[k]; });
+    save(KEY.history, h);
+    refresh();
+  }, [refresh]);
 
   // ---- Withdrawals ----
-  const getWithdrawals = useCallback(async (depotId: string): Promise<Withdrawal[]> => {
-    const snap = await getDocs(query(
-      collection(db, path(uid, depotId, 'withdrawals')),
-      orderBy('date', 'desc')
-    ));
-    return snap.docs.map(d => ({ id: d.id, ...d.data() } as Withdrawal));
-  }, [db, uid]);
+  const getWithdrawals = useCallback((depotId: string): Withdrawal[] => {
+    const all = load<Withdrawal>(KEY.withdrawals);
+    return Object.values(all)
+      .filter(w => w.depotId === depotId)
+      .sort((a, b) => b.date.localeCompare(a.date));
+  }, [version]);
 
-  const addWithdrawal = useCallback(async (data: Omit<Withdrawal, 'id' | 'createdAt'>): Promise<string> => {
-    const ref = await addDoc(collection(db, path(uid, data.depotId, 'withdrawals')), {
-      ...data,
-      createdAt: Timestamp.now(),
-    });
-    return ref.id;
-  }, [db, uid]);
+  const addWithdrawal = useCallback((data: Omit<Withdrawal, 'id' | 'createdAt'>): string => {
+    const all = load<Withdrawal>(KEY.withdrawals);
+    const id = uid();
+    all[id] = { ...data, id, createdAt: now() };
+    save(KEY.withdrawals, all);
+    refresh();
+    return id;
+  }, [refresh]);
 
-  const deleteWithdrawal = useCallback(async (depotId: string, id: string): Promise<void> => {
-    await deleteDoc(doc(db, path(uid, depotId, 'withdrawals'), id));
-  }, [db, uid]);
+  const deleteWithdrawal = useCallback((id: string): void => {
+    const all = load<Withdrawal>(KEY.withdrawals);
+    delete all[id];
+    save(KEY.withdrawals, all);
+    refresh();
+  }, [refresh]);
 
   // ---- Fee Payments ----
-  const getFeePayments = useCallback(async (depotId: string): Promise<FeePayment[]> => {
-    const snap = await getDocs(query(
-      collection(db, path(uid, depotId, 'feePayments')),
-      orderBy('date', 'desc')
-    ));
-    return snap.docs.map(d => ({ id: d.id, ...d.data() } as FeePayment));
-  }, [db, uid]);
+  const getFeePayments = useCallback((depotId: string): FeePayment[] => {
+    const all = load<FeePayment>(KEY.fees);
+    return Object.values(all)
+      .filter(f => f.depotId === depotId)
+      .sort((a, b) => b.date.localeCompare(a.date));
+  }, [version]);
 
-  const addFeePayment = useCallback(async (data: Omit<FeePayment, 'id' | 'createdAt'>): Promise<string> => {
-    const ref = await addDoc(collection(db, path(uid, data.depotId, 'feePayments')), {
-      ...data,
-      createdAt: Timestamp.now(),
-    });
-    return ref.id;
-  }, [db, uid]);
+  const addFeePayment = useCallback((data: Omit<FeePayment, 'id' | 'createdAt'>): string => {
+    const all = load<FeePayment>(KEY.fees);
+    const id = uid();
+    all[id] = { ...data, id, createdAt: now() };
+    save(KEY.fees, all);
+    refresh();
+    return id;
+  }, [refresh]);
 
   // ---- Value History ----
-  const getValueHistory = useCallback(async (depotId: string): Promise<ValueEntry[]> => {
-    const snap = await getDocs(query(
-      collection(db, path(uid, depotId, 'valueHistory')),
-      orderBy('date', 'desc')
-    ));
-    return snap.docs.map(d => ({ id: d.id, ...d.data() } as ValueEntry));
-  }, [db, uid]);
+  const getValueHistory = useCallback((depotId: string): ValueEntry[] => {
+    const all = load<ValueEntry>(KEY.history);
+    return Object.values(all)
+      .filter(v => v.depotId === depotId)
+      .sort((a, b) => b.date.localeCompare(a.date));
+  }, [version]);
 
-  const addValueEntry = useCallback(async (data: Omit<ValueEntry, 'id' | 'createdAt'>): Promise<string> => {
-    const ref = await addDoc(collection(db, path(uid, data.depotId, 'valueHistory')), {
-      ...data,
-      createdAt: Timestamp.now(),
-    });
-    return ref.id;
-  }, [db, uid]);
+  const addValueEntry = useCallback((data: Omit<ValueEntry, 'id' | 'createdAt'>): string => {
+    const all = load<ValueEntry>(KEY.history);
+    const id = uid();
+    all[id] = { ...data, id, createdAt: now() };
+    save(KEY.history, all);
+    refresh();
+    return id;
+  }, [refresh]);
 
-  const deleteValueEntry = useCallback(async (depotId: string, id: string): Promise<void> => {
-    await deleteDoc(doc(db, path(uid, depotId, 'valueHistory'), id));
-  }, [db, uid]);
+  const deleteValueEntry = useCallback((id: string): void => {
+    const all = load<ValueEntry>(KEY.history);
+    delete all[id];
+    save(KEY.history, all);
+    refresh();
+  }, [refresh]);
+
+  // ---- Backup / Restore ----
+  const exportBackup = useCallback((): void => {
+    const backup: AppBackup = {
+      version: 1,
+      exportedAt: now(),
+      depots: load<Depot>(KEY.depots),
+      withdrawals: load<Withdrawal>(KEY.withdrawals),
+      feePayments: load<FeePayment>(KEY.fees),
+      valueHistory: load<ValueEntry>(KEY.history),
+    };
+    const json = JSON.stringify(backup, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `depotverwaltung_backup_${new Date().toISOString().split('T')[0]}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, []);
+
+  const importBackup = useCallback(async (file: File): Promise<void> => {
+    const text = await file.text();
+    const backup: AppBackup = JSON.parse(text);
+    if (!backup.version || !backup.depots) throw new Error('Ungültige Backup-Datei.');
+    save(KEY.depots, backup.depots);
+    save(KEY.withdrawals, backup.withdrawals || {});
+    save(KEY.fees, backup.feePayments || {});
+    save(KEY.history, backup.valueHistory || {});
+    refresh();
+  }, [refresh]);
 
   return (
     <Ctx.Provider value={{
+      version, refresh,
       getDepots, addDepot, updateDepot, deleteDepot,
       getWithdrawals, addWithdrawal, deleteWithdrawal,
       getFeePayments, addFeePayment,
       getValueHistory, addValueEntry, deleteValueEntry,
+      exportBackup, importBackup,
     }}>
       {children}
     </Ctx.Provider>

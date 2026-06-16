@@ -1,14 +1,12 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { doc, getDoc } from 'firebase/firestore';
-import { useAuth } from '../contexts/AuthContext';
 import { useData } from '../contexts/DataContext';
 import { Depot, Withdrawal, FeePayment, ValueEntry } from '../types';
 import { formatCurrency, formatDate, formatBillingDate, daysUntilBilling, today, currentYear } from '../utils/format';
 import { calculateBilling, BillingResult } from '../utils/calculations';
 import { generateExcel } from '../utils/excelExport';
 
-// ---- Modals ----
+// ---- Shared Modal wrapper ----
 
 function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
   return (
@@ -22,20 +20,19 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
   );
 }
 
-function WithdrawalModal({ depot, onClose, onSave }: { depot: Depot; onClose: () => void; onSave: (amount: number, date: string, note: string) => Promise<void> }) {
+// ---- Modals ----
+
+function WithdrawalModal({ depot, onClose, onSave }: { depot: Depot; onClose: () => void; onSave: (amount: number, date: string, note: string) => void }) {
   const [amount, setAmount] = useState('');
   const [type, setType] = useState<'out' | 'in'>('out');
   const [date, setDate] = useState(today());
   const [note, setNote] = useState('');
-  const [saving, setSaving] = useState(false);
 
-  const submit = async (e: React.FormEvent) => {
+  const submit = (e: React.FormEvent) => {
     e.preventDefault();
     const val = parseFloat(amount);
     if (isNaN(val) || val <= 0) return;
-    setSaving(true);
-    const signed = type === 'out' ? -val : val;
-    await onSave(signed, date, note);
+    onSave(type === 'out' ? -val : val, date, note);
     onClose();
   };
 
@@ -67,25 +64,23 @@ function WithdrawalModal({ depot, onClose, onSave }: { depot: Depot; onClose: ()
         </div>
         <div className="modal-actions">
           <button type="button" className="btn btn-ghost" onClick={onClose}>Abbrechen</button>
-          <button type="submit" className="btn btn-primary" disabled={saving}>Speichern</button>
+          <button type="submit" className="btn btn-primary">Speichern</button>
         </div>
       </form>
     </Modal>
   );
 }
 
-function ValueUpdateModal({ depot, onClose, onSave }: { depot: Depot; onClose: () => void; onSave: (value: number, date: string, note: string) => Promise<void> }) {
+function ValueUpdateModal({ depot, onClose, onSave }: { depot: Depot; onClose: () => void; onSave: (value: number, date: string, note: string) => void }) {
   const [value, setValue] = useState(depot.currentValue.toString());
   const [date, setDate] = useState(today());
   const [note, setNote] = useState('');
-  const [saving, setSaving] = useState(false);
 
-  const submit = async (e: React.FormEvent) => {
+  const submit = (e: React.FormEvent) => {
     e.preventDefault();
     const val = parseFloat(value);
     if (isNaN(val) || val < 0) return;
-    setSaving(true);
-    await onSave(val, date, note);
+    onSave(val, date, note);
     onClose();
   };
 
@@ -107,23 +102,21 @@ function ValueUpdateModal({ depot, onClose, onSave }: { depot: Depot; onClose: (
         </div>
         <div className="modal-actions">
           <button type="button" className="btn btn-ghost" onClick={onClose}>Abbrechen</button>
-          <button type="submit" className="btn btn-primary" disabled={saving}>Aktualisieren</button>
+          <button type="submit" className="btn btn-primary">Aktualisieren</button>
         </div>
       </form>
     </Modal>
   );
 }
 
-function BenchmarkModal({ depot, onClose, onSave }: { depot: Depot; onClose: () => void; onSave: (rate: number) => Promise<void> }) {
+function BenchmarkModal({ depot, onClose, onSave }: { depot: Depot; onClose: () => void; onSave: (rate: number) => void }) {
   const [rate, setRate] = useState(depot.benchmarkRate.toString());
-  const [saving, setSaving] = useState(false);
 
-  const submit = async (e: React.FormEvent) => {
+  const submit = (e: React.FormEvent) => {
     e.preventDefault();
     const val = parseFloat(rate);
     if (isNaN(val)) return;
-    setSaving(true);
-    await onSave(val);
+    onSave(val);
     onClose();
   };
 
@@ -137,7 +130,7 @@ function BenchmarkModal({ depot, onClose, onSave }: { depot: Depot; onClose: () 
         </div>
         <div className="modal-actions">
           <button type="button" className="btn btn-ghost" onClick={onClose}>Abbrechen</button>
-          <button type="submit" className="btn btn-primary" disabled={saving}>Speichern</button>
+          <button type="submit" className="btn btn-primary">Speichern</button>
         </div>
       </form>
     </Modal>
@@ -148,18 +141,11 @@ function BillingModal({ depot, withdrawals, onClose, onConfirm }: {
   depot: Depot;
   withdrawals: Withdrawal[];
   onClose: () => void;
-  onConfirm: (result: BillingResult) => Promise<void>;
+  onConfirm: (result: BillingResult) => void;
 }) {
   const lastBilling = depot.lastBillingDate;
   const wSince = withdrawals.filter(w => !lastBilling || w.date > lastBilling);
   const result = calculateBilling(depot, wSince);
-  const [confirming, setConfirming] = useState(false);
-
-  const confirm = async () => {
-    setConfirming(true);
-    await onConfirm(result);
-    onClose();
-  };
 
   const Row = ({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) => (
     <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--border)', fontSize: '.9375rem' }}>
@@ -177,10 +163,10 @@ function BillingModal({ depot, withdrawals, onClose, onConfirm }: {
       <Row label="Depotwert aktuell" value={formatCurrency(result.currentValue, depot.currency)} />
       <Row label="Nettoentnahmen" value={formatCurrency(Math.abs(result.netWithdrawals), depot.currency)} />
       <Row label="Bereinigter Wert" value={formatCurrency(result.adjustedValue, depot.currency)} />
-      <Row label={`High-Water-Mark (Vorjahr)`} value={formatCurrency(depot.highWaterMark, depot.currency)} />
+      <Row label="High-Water-Mark (Vorjahr)" value={formatCurrency(depot.highWaterMark, depot.currency)} />
       <Row label={`Hurdle (HWM + ${depot.benchmarkRate}%)`} value={formatCurrency(result.hurdle, depot.currency)} />
       <div style={{ height: 8 }} />
-      <Row label={`Lfd. Verg. (${depot.managementFeeRate}%)`} value={formatCurrency(result.managementFee, depot.currency)} highlight />
+      <Row label={`Lfd. Vergütung (${depot.managementFeeRate}%)`} value={formatCurrency(result.managementFee, depot.currency)} highlight />
       <Row
         label={`Übergewinn-Verg. (${depot.performanceFeeRate}%)`}
         value={result.performanceFeeApplied ? formatCurrency(result.performanceFee, depot.currency) : `— (kein Übergewinn)`}
@@ -200,7 +186,7 @@ function BillingModal({ depot, withdrawals, onClose, onConfirm }: {
 
       <div className="modal-actions">
         <button type="button" className="btn btn-ghost" onClick={onClose}>Abbrechen</button>
-        <button className="btn btn-primary" onClick={confirm} disabled={confirming}>
+        <button className="btn btn-primary" onClick={() => { onConfirm(result); onClose(); }}>
           Abrechnung bestätigen
         </button>
       </div>
@@ -228,7 +214,6 @@ function OverviewTab({ depot, onUpdateValue, onWithdrawal, onBenchmark, onBillin
           ⚠️ Abrechnung in {days} Tagen fällig ({formatBillingDate(depot.billingDate)})
         </div>
       )}
-
       <div className="info-grid">
         <div className="info-cell">
           <div className="info-cell-label">Startwert</div>
@@ -237,7 +222,7 @@ function OverviewTab({ depot, onUpdateValue, onWithdrawal, onBenchmark, onBillin
         <div className="info-cell">
           <div className="info-cell-label">Rendite ges.</div>
           <div className={`info-cell-value ${ret >= 0 ? 'positive' : 'negative'}`}>
-            {ret >= 0 ? '+' : ''}{ret.toFixed(2) === '0.00' ? '—' : formatCurrency(ret, depot.currency)}
+            {ret >= 0 ? '+' : ''}{formatCurrency(ret, depot.currency)}
           </div>
         </div>
         <div className="info-cell">
@@ -259,7 +244,7 @@ function OverviewTab({ depot, onUpdateValue, onWithdrawal, onBenchmark, onBillin
           <div className="info-cell-value">{depot.benchmarkRate.toFixed(2)}%</div>
         </div>
         <div className="info-cell">
-          <div className="info-cell-label">Lfd. Verg. p.a.</div>
+          <div className="info-cell-label">Lfd. Vergütung p.a.</div>
           <div className="info-cell-value">{depot.managementFeeRate.toFixed(2)}%</div>
         </div>
         <div className="info-cell">
@@ -310,26 +295,13 @@ function OverviewTab({ depot, onUpdateValue, onWithdrawal, onBenchmark, onBillin
 
 function WithdrawalsTab({ depotId, currency }: { depotId: string; currency: string }) {
   const { getWithdrawals, deleteWithdrawal } = useData();
-  const [items, setItems] = useState<Withdrawal[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    setItems(await getWithdrawals(depotId));
-    setLoading(false);
-  }, [getWithdrawals, depotId]);
-
-  useEffect(() => { load(); }, [load]);
-
-  const remove = async (id: string) => {
-    if (!confirm('Eintrag löschen?')) return;
-    await deleteWithdrawal(depotId, id);
-    load();
-  };
-
+  const items = getWithdrawals(depotId);
   const net = items.reduce((s, i) => s + i.amount, 0);
 
-  if (loading) return <div className="spinner" />;
+  const remove = (id: string) => {
+    if (!confirm('Eintrag löschen?')) return;
+    deleteWithdrawal(id);
+  };
 
   return (
     <div style={{ padding: '12px 0' }}>
@@ -344,7 +316,7 @@ function WithdrawalsTab({ depotId, currency }: { depotId: string; currency: stri
       {items.length === 0 ? (
         <div className="empty"><div className="empty-icon">💸</div><h3>Keine Einträge</h3><p>Entnahmen und Einzahlungen erscheinen hier.</p></div>
       ) : (
-        <div className="card" style={{ margin: '12px 16px', borderRadius: 'var(--radius)' }}>
+        <div className="card" style={{ margin: '12px 16px' }}>
           {items.map(w => (
             <div key={w.id} className="list-item">
               <div className="li-left">
@@ -368,34 +340,23 @@ function WithdrawalsTab({ depotId, currency }: { depotId: string; currency: stri
 }
 
 function HistoryTab({ depotId, currency, depot }: { depotId: string; currency: string; depot: Depot }) {
-  const { getValueHistory, getFeePayments, deleteValueEntry } = useData();
-  const [values, setValues] = useState<ValueEntry[]>([]);
-  const [fees, setFees] = useState<FeePayment[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { getValueHistory, getFeePayments, deleteValueEntry, getWithdrawals } = useData();
   const [tab, setTab] = useState<'values' | 'fees'>('values');
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    const [v, f] = await Promise.all([getValueHistory(depotId), getFeePayments(depotId)]);
-    setValues(v); setFees(f);
-    setLoading(false);
-  }, [getValueHistory, getFeePayments, depotId]);
+  const values = getValueHistory(depotId);
+  const fees = getFeePayments(depotId);
+  const withdrawals = getWithdrawals(depotId);
 
-  useEffect(() => { load(); }, [load]);
+  const exportExcel = () => generateExcel(depot, values, fees, withdrawals);
 
-  const removeValue = async (id: string) => {
+  const removeValue = (id: string) => {
     if (!confirm('Eintrag löschen?')) return;
-    await deleteValueEntry(depotId, id);
-    load();
+    deleteValueEntry(id);
   };
-
-  const exportExcel = () => generateExcel(depot, values, fees, []);
-
-  if (loading) return <div className="spinner" />;
 
   return (
     <div>
-      <div style={{ padding: '8px 16px', display: 'flex', gap: 8, alignItems: 'center', borderBottom: '1px solid var(--border)', background: 'var(--bg-card)' }}>
+      <div style={{ padding: '8px 16px', display: 'flex', gap: 0, alignItems: 'center', borderBottom: '1px solid var(--border)', background: 'var(--bg-card)' }}>
         <button className={`tab ${tab === 'values' ? 'active' : ''}`} style={{ padding: '8px 12px' }} onClick={() => setTab('values')}>Wertverläufe</button>
         <button className={`tab ${tab === 'fees' ? 'active' : ''}`} style={{ padding: '8px 12px' }} onClick={() => setTab('fees')}>Abrechnungen</button>
         <button className="btn btn-secondary btn-sm" style={{ marginLeft: 'auto' }} onClick={exportExcel}>
@@ -450,61 +411,38 @@ function HistoryTab({ depotId, currency, depot }: { depotId: string; currency: s
 export default function DepotDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { db, user } = useAuth();
-  const { updateDepot, addWithdrawal, addFeePayment, addValueEntry, getWithdrawals } = useData();
+  const { getDepots, updateDepot, addWithdrawal, addFeePayment, addValueEntry, getWithdrawals } = useData();
 
-  const [depot, setDepot] = useState<Depot | null>(null);
-  const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<'overview' | 'withdrawals' | 'history'>('overview');
   const [modal, setModal] = useState<'value' | 'withdrawal' | 'benchmark' | 'billing' | null>(null);
-  const [withdrawals, setWithdrawals] = useState<Withdrawal[]>([]);
 
-  const load = useCallback(async () => {
-    if (!id || !user) return;
-    const snap = await getDoc(doc(db, `users/${user.uid}/depots/${id}`));
-    if (snap.exists()) {
-      setDepot({ id: snap.id, ...snap.data() } as Depot);
-    }
-    setLoading(false);
-  }, [id, db, user]);
+  const depot = getDepots().find(d => d.id === id);
 
-  const loadWithdrawals = useCallback(async () => {
-    if (!id) return;
-    setWithdrawals(await getWithdrawals(id));
-  }, [id, getWithdrawals]);
+  if (!depot) return <div className="page"><p style={{ paddingTop: 24 }}>Depot nicht gefunden.</p></div>;
 
-  useEffect(() => { load(); loadWithdrawals(); }, [load, loadWithdrawals]);
+  const withdrawals = getWithdrawals(depot.id);
 
-  const handleValueUpdate = async (value: number, date: string, note: string) => {
-    if (!depot || !id) return;
-    await addValueEntry({ depotId: id, value: depot.currentValue, date, note: `Vorheriger Wert (vor Update auf ${formatCurrency(value, depot.currency)})` });
-    await updateDepot(id, { currentValue: value });
-    load();
+  const handleValueUpdate = (value: number, date: string, note: string) => {
+    addValueEntry({ depotId: depot.id, value: depot.currentValue, date, note: `Vorheriger Wert (vor Update auf ${formatCurrency(value, depot.currency)})` });
+    updateDepot(depot.id, { currentValue: value });
   };
 
-  const handleWithdrawal = async (amount: number, date: string, note: string) => {
-    if (!id) return;
-    await addWithdrawal({ depotId: id, amount, date, note });
-    loadWithdrawals();
+  const handleWithdrawal = (amount: number, date: string, note: string) => {
+    addWithdrawal({ depotId: depot.id, amount, date, note });
   };
 
-  const handleBenchmark = async (rate: number) => {
-    if (!id) return;
-    await updateDepot(id, { benchmarkRate: rate });
-    load();
+  const handleBenchmark = (rate: number) => {
+    updateDepot(depot.id, { benchmarkRate: rate });
   };
 
-  const handleBilling = async (result: BillingResult) => {
-    if (!depot || !id) return;
+  const handleBilling = (result: BillingResult) => {
     const todayStr = today();
-    const year = currentYear();
-
-    await addFeePayment({
-      depotId: id,
+    addFeePayment({
+      depotId: depot.id,
       managementFee: result.managementFee,
       performanceFee: result.performanceFee,
       totalFee: result.totalFee,
-      period: year,
+      period: currentYear(),
       date: todayStr,
       depotValueAtBilling: result.currentValue,
       adjustedValue: result.adjustedValue,
@@ -514,26 +452,18 @@ export default function DepotDetailPage() {
       benchmarkRate: depot.benchmarkRate,
       hurdle: result.hurdle,
     });
-
-    await updateDepot(id, {
+    updateDepot(depot.id, {
       currentValue: result.newCurrentValue,
       highWaterMark: result.newHighWaterMark,
       lastBillingDate: todayStr,
     });
-
-    load();
-    loadWithdrawals();
   };
-
-  if (loading) return <div className="spinner" />;
-  if (!depot) return <div className="page"><p>Depot nicht gefunden.</p></div>;
 
   const ret = depot.currentValue - depot.startValue;
   const retPct = depot.startValue > 0 ? (ret / depot.startValue) * 100 : 0;
 
   return (
     <>
-      {/* Back bar */}
       <div className="topbar-global" style={{ maxWidth: '100%' }}>
         <button className="btn btn-ghost btn-sm" onClick={() => navigate('/')} style={{ padding: '6px 8px' }}>
           <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
@@ -544,20 +474,18 @@ export default function DepotDetailPage() {
         </button>
       </div>
 
-      {/* Hero */}
       <div className="detail-hero">
         <h2>{depot.clientName}</h2>
         <div className="detail-hero-sub">{depot.clientEmail}</div>
         <div className="detail-hero-value">{formatCurrency(depot.currentValue, depot.currency)}</div>
         <div className="detail-hero-meta">
-          <span className={ret >= 0 ? '' : ''} style={{ color: ret >= 0 ? '#86efac' : '#fca5a5' }}>
+          <span style={{ color: ret >= 0 ? '#86efac' : '#fca5a5' }}>
             {ret >= 0 ? '+' : ''}{formatCurrency(ret, depot.currency)} ({ret >= 0 ? '+' : ''}{retPct.toFixed(2)}%)
           </span>
           <span>Abr.: {formatBillingDate(depot.billingDate)} ({daysUntilBilling(depot.billingDate)}d)</span>
         </div>
       </div>
 
-      {/* Tabs */}
       <div className="tabs">
         <button className={`tab ${tab === 'overview' ? 'active' : ''}`} onClick={() => setTab('overview')}>Übersicht</button>
         <button className={`tab ${tab === 'withdrawals' ? 'active' : ''}`} onClick={() => setTab('withdrawals')}>Entnahmen</button>
@@ -578,7 +506,6 @@ export default function DepotDetailPage() {
         {tab === 'history' && <HistoryTab depotId={depot.id} currency={depot.currency} depot={depot} />}
       </div>
 
-      {/* Modals */}
       {modal === 'value' && <ValueUpdateModal depot={depot} onClose={() => setModal(null)} onSave={handleValueUpdate} />}
       {modal === 'withdrawal' && <WithdrawalModal depot={depot} onClose={() => setModal(null)} onSave={handleWithdrawal} />}
       {modal === 'benchmark' && <BenchmarkModal depot={depot} onClose={() => setModal(null)} onSave={handleBenchmark} />}
